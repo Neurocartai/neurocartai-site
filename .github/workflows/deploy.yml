@@ -1,10 +1,37 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - "README.md"
+      - ".github/**"
+  workflow_dispatch:
+
+# Minimal permissions needed
+permissions:
+  contents: read        # for actions/checkout
+  id-token: write       # for OIDC / Workload Identity Federation if used by actions
+
+# Prevent overlapping deploys to the same env
+concurrency:
+  group: "hosting-live"
+  cancel-in-progress: true
+
+env:
+  FIREBASE_PROJECT_ID: neurocartai-467717   # <-- your GCP/Firebase project
+
+4ad54ba (ci: use Node 22 for Firebase CLI compatibility)
 jobs:
   build-and-deploy:
+    name: Build and deploy to Firebase Hosting
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v3
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+HEAD
       # ⬇️ bump Node to 22 (or 20)
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -12,8 +39,26 @@ jobs:
           node-version: 22
           cache: 'npm'   # optional but nice
 
-      - name: Install Dependencies
+      # If your site/app has a package.json (e.g., Next.js, Vite, React),
+      # we build it; otherwise this step is a no-op.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+4ad54ba (ci: use Node 22 for Firebase CLI compatibility)
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+          key: ${{ runner.os }}-npm-${{ hashFiles('/package-lock.json', '/pnpm-lock.yaml', '**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install & build (if package.json exists)
         run: |
+HEAD
           if [ -f package.json ]; then npm ci || npm install; fi
 
       - name: Build Project
@@ -21,9 +66,32 @@ jobs:
           if [ -f package.json ]; then npm run build || true; fi
 
       - name: Deploy to Firebase Hosting
+
+          if [ -f package.json ]; then
+            if [ -f pnpm-lock.yaml ]; then
+              corepack enable
+              corepack prepare pnpm@latest --activate
+              pnpm install --frozen-lockfile
+              pnpm run build || true
+            elif [ -f yarn.lock ]; then
+              corepack enable
+              corepack prepare yarn@stable --activate
+              yarn install --frozen-lockfile
+              yarn build || true
+            else
+              npm ci
+              npm run build || true
+            fi
+          else
+            echo "No package.json found; skipping build."
+          fi
+
+      # Deploy to Firebase Hosting (uses firebase.json / .firebaserc in repo)
+      - name: Deploy to Firebase Hosting (live)
+4ad54ba (ci: use Node 22 for Firebase CLI compatibility)
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
-          repoToken: "${{ secrets.GITHUB_TOKEN }}"
-          firebaseServiceAccount: "${{ secrets.FIREBASE_SERVICE_ACCOUNT_NEUROCARTAI }}"
-          channelId: live
-          projectId: neurocartai-467717
+          repoToken: ${{ secrets.GITHUB_TOKEN }}                       # required
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_NEUROCARTAI }} # JSON key or WIF token
+          channelId: live                                              # 'live' for production
+          projectId: ${{ env.FIREBASE_PROJECT_ID }}
