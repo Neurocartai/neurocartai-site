@@ -1,0 +1,39 @@
+name: Deploy Agent 5 Backend
+
+on:
+  push:
+    paths:
+      - "app/**"
+      - ".github/workflows/deploy-backend.yml"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write  # needed for Workload Identity Federation
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: neurocartai-467717
+          service_account_key: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_NEUROCARTAI }}
+          export_default_credentials: true
+
+      - name: Build and push Docker image
+        run: |
+          gcloud builds submit \
+            --tag gcr.io/neurocartai-467717/agent5-backend ./app
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy agent5-backend \
+            --image gcr.io/neurocartai-467717/agent5-backend \
+            --platform managed \
+            --region us-central1 \
+            --allow-unauthenticated
