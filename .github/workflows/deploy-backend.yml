@@ -1,39 +1,56 @@
-name: Deploy Agent 5 Backend
+name: Deploy Agent 5 Backend (Cloud Run)
 
 on:
   push:
+    branches: [ main ]
     paths:
       - "app/**"
+      - "app/Dockerfile"
+      - "Dockerfile"
+      - "requirements.txt"
       - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: neurocartai-467717
+  REGION: us-central1
+  SERVICE: agent5-backend
+  IMAGE: gcr.io/neurocartai-467717/agent5-backend
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      id-token: write  # needed for Workload Identity Federation
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout Repo
+        uses: actions/checkout@v4
 
+      # If you’ve set FIREBASE_SERVICE_ACCOUNT_NEUROCARTAI to a JSON key,
+      # setup-gcloud can use it directly. (Keyless/WIF works too if you prefer.)
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v1
         with:
-          project_id: neurocartai-467717
+          project_id: ${{ env.PROJECT_ID }}
           service_account_key: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_NEUROCARTAI }}
           export_default_credentials: true
 
-      - name: Build and push Docker image
+      - name: Configure gcloud defaults
         run: |
-          gcloud builds submit \
-            --tag gcr.io/neurocartai-467717/agent5-backend ./app
+          gcloud config set project "$PROJECT_ID"
+          gcloud config set run/region "$REGION"
+
+      - name: Build & Push container to Artifact Registry (GCR)
+        run: |
+          gcloud builds submit ./app --tag "$IMAGE"
 
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy agent5-backend \
-            --image gcr.io/neurocartai-467717/agent5-backend \
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE" \
             --platform managed \
-            --region us-central1 \
+            --region "$REGION" \
             --allow-unauthenticated
