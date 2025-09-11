@@ -1,0 +1,159 @@
+version: 1
+last_updated: 2025-09-11
+owner: "Agent5 Compliance / Ops"
+
+defaults:
+  locale_variation_window_hours: 48
+  duplicate_cooldown_hours: 48
+  max_posts_per_channel_per_day: 24
+  escalation_telegram: true
+
+risks:
+  - id: content_duplicate
+    severity: medium
+    description: "Avoid repeating identical or near-identical posts per channel within cooldown window."
+    applies_to: [social_post]
+    detect:
+      type: similarity
+      fields: [caption, body, image_hash]
+      threshold: 0.92
+      window_hours: 48
+    mitigate:
+      actions:
+        - "regenerate_caption_variant"
+        - "swap_image_or_style"
+        - "delay_until_window_elapsed"
+    metrics:
+      key: duplicate_post_rate
+      threshold_warn: 0.05         # 5% duplicates in last 7 days
+      threshold_critical: 0.10
+
+  - id: content_inappropriate
+    severity: high
+    description: "Block unsafe or disallowed content (profanity, slurs, adult, disallowed topics)."
+    applies_to: [social_post, reply, ad_creative]
+    detect:
+      type: moderation
+      provider: "vertex-safety"     # or "openai-moderation", "gcloud-text-safety"
+      categories_block: [hate, sexual, selfharm, violence, illegal]
+      min_severity: "medium"
+    mitigate:
+      actions:
+        - "rewrite_with_safe_prompt"
+        - "fallback_to_generic_creative"
+        - "route_to_human_review_if_persistent"
+    metrics:
+      key: moderation_block_rate
+      threshold_warn: 0.02
+      threshold_critical: 0.05
+    escalate:
+      when: "blocked_events_24h >= 5"
+      to: "human_review"
+
+  - id: ip_licensing
+    severity: high
+    description: "Ensure images/video/music are licensed or generated with allowed models & usage."
+    applies_to: [social_post, ad_creative, landing_asset]
+    detect:
+      type: licensing
+      require_license_tag: true
+      allowed_sources: [gcs://licensed/, "shutterstock", "getty", "pexels", "unsplash-api", "ai-generated-imagen2", "sdxl-local"]
+    mitigate:
+      actions:
+        - "swap_to_ai_generated_stock"
+        - "auto-attach_license_metadata"
+        - "block_if_license_unknown"
+    metrics:
+      key: unlicensed_asset_rate
+      threshold_warn: 0.01
+      threshold_critical: 0.02
+
+  - id: regional_tone_mismatch
+    severity: medium
+    description: "Tone and offer must adapt to locale (formality, emoji, price display, currency)."
+    applies_to: [social_post, reply, landing_copy]
+    detect:
+      type: locale_policy
+      rules:
+        - locale: "JP"
+          tone: "formal"
+          emoji_max: 1
+        - locale: "DE"
+          tone: "formal"
+          price_format: "€{amount}"
+        - locale: "BR"
+          tone: "friendly"
+          channels_pref: ["instagram", "whatsapp"]
+    mitigate:
+      actions:
+        - "retune_style_by_locale_profile"
+        - "format_currency_locale"
+        - "switch_preferred_channel"
+    metrics:
+      key: locale_adjustment_miss_rate
+      threshold_warn: 0.05
+      threshold_critical: 0.10
+
+  - id: rate_limit_spam
+    severity: high
+    description: "Prevent spam: cap posting frequency per channel and per audience."
+    applies_to: [social_post, dm, comment]
+    detect:
+      type: rate_limit
+      per_channel_per_day: 24
+      per_audience_per_day: 4
+      burst_limit_per_hour: 5
+    mitigate:
+      actions:
+        - "queue_and_spread"
+        - "merge_posts"
+        - "reduce_channels_this_cycle"
+    metrics:
+      key: rate_limit_near_breaches
+      threshold_warn: 10
+      threshold_critical: 25
+
+  - id: factuality_offer_integrity
+    severity: high
+    description: "Block claims about pricing/availability that don’t match source of truth."
+    applies_to: [social_post, landing_copy, reply]
+    detect:
+      type: sot_check
+      sources: ["bq://pricing.current", "firestore://offers", "sheet://pricing-ops"]
+    mitigate:
+      actions:
+        - "auto-correct_from_sot"
+        - "strip_claims_and_link_to_offer_page"
+        - "route_to_human_if_unresolvable"
+    metrics:
+      key: sot_mismatch_rate
+      threshold_warn: 0.01
+      threshold_critical: 0.02
+
+  - id: cost_guardrails
+    severity: medium
+    description: "Keep infra + generation costs under budget per day/week."
+    applies_to: [generation_job, avatar_render, campaign]
+    detect:
+      type: cost_budget
+      daily_usd_limit: 1200
+      weekly_usd_limit: 6000
+    mitigate:
+      actions:
+        - "lower_quality_tier"
+        - "switch_to_cached_variants"
+        - "pause_noncritical_locales"
+    metrics:
+      key: budget_breach_events
+      threshold_warn: 1
+      threshold_critical: 3
+
+escalations:
+  human_review:
+    channel: "telegram"
+    chat_id_secret: "telegram_chat_id"
+    message_template: "[ALERT][{{risk_id}}] {{summary}}"
+
+telemetry:
+  sink: "bq://neurocartai_analytics.guardrail_events"
+  sample_rate: 1.0
