@@ -4,41 +4,35 @@ on:
   push:
     branches: [ main ]
     paths:
+      - "public/**"
       - "firebase.json"
       - ".firebaserc"
-      - "public/**"
-      - "app/**"
-      - "package.json"
-      - "package-lock.json"
       - ".github/workflows/deploy-frontend.yml"
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  id-token: write
+      # add your real build output or app code paths here if you build:
+      # - "src/**" - "package.json" - "vite.config.*" - "next.config.*"
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      # If you have a JS build (Vite/Next/React), keep this block and build.
+      # If you’re only serving /public, you can delete this whole Node block.
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Install Dependencies (if any)
+      - name: Install & Build (skip if no package.json)
+        if: ${{ hashFiles('**/package.json') != '' }}
         run: |
-          if [ -f package.json ]; then npm ci || npm install; fi
+          npm ci || npm install
+          npm run build || echo "No build script, skipping"
 
-      - name: Build Project (if applicable)
-        run: |
-          if [ -f package.json ]; then npm run build || true; fi
-
-      - name: Deploy to Firebase Hosting
+      - name: Deploy to Firebase Hosting (production)
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: "${{ secrets.GITHUB_TOKEN }}"
